@@ -18,6 +18,7 @@ type Client struct {
 	transport *transport.Client
 	Speech    *SpeechService
 	File      *FileService
+	Voice     *VoiceService
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -41,6 +42,10 @@ func NewClient(config Config) (*Client, error) {
 		transport:      trans,
 		uploadEndpoint: defaultFileUploadPath,
 		maxUploadBytes: defaultFileMaxUploadBytes,
+	}
+	client.Voice = &VoiceService{
+		transport: trans,
+		endpoint:  defaultVoiceListPath,
 	}
 
 	return client, nil
