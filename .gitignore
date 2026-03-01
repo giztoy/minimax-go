@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# IDE / Editor
+.idea/
+.vscode/
+
+# Build artifacts
+bin/
+dist/
+
+# Go binaries and test outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Dependency directories
+vendor/
