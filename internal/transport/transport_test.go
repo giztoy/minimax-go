@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -434,6 +435,107 @@ func TestUploadRequiresFileInfo(t *testing.T) {
 	if err == nil {
 		t.Fatal("Upload() error = nil, want non-nil")
 	}
+}
+
+func TestUploadHeaderBehavior(t *testing.T) {
+	t.Parallel()
+
+	t.Run("api key injects authorization header", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "Bearer upload-token" {
+				t.Fatalf("Authorization = %q, want Bearer upload-token", got)
+			}
+
+			contentType := r.Header.Get("Content-Type")
+			if !strings.HasPrefix(contentType, "multipart/form-data;") {
+				t.Fatalf("Content-Type = %q, want multipart/form-data", contentType)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"}}`))
+		}))
+		defer srv.Close()
+
+		client, err := New(Config{
+			BaseURL:    srv.URL,
+			APIKey:     "upload-token",
+			HTTPClient: srv.Client(),
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v, want nil", err)
+		}
+
+		err = client.Upload(context.Background(), UploadRequest{
+			Path:      "/upload",
+			FileField: "file",
+			FileName:  "demo.txt",
+			FileData:  []byte("hello"),
+		}, nil)
+		if err != nil {
+			t.Fatalf("Upload() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("request headers override defaults and keep multipart content type", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "Bearer request-token" {
+				t.Fatalf("Authorization = %q, want Bearer request-token", got)
+			}
+
+			if got := r.Header.Get("X-Trace-ID"); got != "request-trace" {
+				t.Fatalf("X-Trace-ID = %q, want request-trace", got)
+			}
+
+			contentType := r.Header.Get("Content-Type")
+			mediaType, params, err := mime.ParseMediaType(contentType)
+			if err != nil {
+				t.Fatalf("ParseMediaType(Content-Type) error = %v", err)
+			}
+
+			if mediaType != "multipart/form-data" {
+				t.Fatalf("mediaType = %q, want multipart/form-data", mediaType)
+			}
+
+			if strings.TrimSpace(params["boundary"]) == "" {
+				t.Fatalf("multipart boundary is empty in Content-Type %q", contentType)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"}}`))
+		}))
+		defer srv.Close()
+
+		client, err := New(Config{
+			BaseURL:    srv.URL,
+			HTTPClient: srv.Client(),
+			DefaultHeaders: http.Header{
+				"Authorization": []string{"Bearer default-token"},
+				"X-Trace-ID":    []string{"default-trace"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v, want nil", err)
+		}
+
+		err = client.Upload(context.Background(), UploadRequest{
+			Path:      "/upload",
+			FileField: "file",
+			FileName:  "demo.txt",
+			FileData:  []byte("hello"),
+			Headers: http.Header{
+				"Authorization": []string{"Bearer request-token"},
+				"X-Trace-ID":    []string{"request-trace"},
+				"Content-Type":  []string{"application/json"},
+			},
+		}, nil)
+		if err != nil {
+			t.Fatalf("Upload() error = %v, want nil", err)
+		}
+	})
 }
 
 // Compile-time guard: keep multipart dependency linked in tests.

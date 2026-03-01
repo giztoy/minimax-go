@@ -295,8 +295,8 @@ func (c *Client) Upload(ctx context.Context, request UploadRequest, out any) err
 		}
 
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Content-Type", writer.FormDataContentType())
 		mergeHeaders(req.Header, request.Headers)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
 
 		resp, doErr := c.httpClient.Do(req)
 		if doErr != nil {
