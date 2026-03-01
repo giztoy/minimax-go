@@ -21,3 +21,6 @@ coverage.out
 
 # Dependency directories
 vendor/
+
+# Local planning workspace
+/openteam/
