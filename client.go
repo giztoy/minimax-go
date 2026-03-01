@@ -35,8 +35,9 @@ func NewClient(config Config) (*Client, error) {
 
 	client := &Client{transport: trans}
 	client.Speech = &SpeechService{
-		transport: trans,
-		endpoint:  defaultSpeechSynthesizePath,
+		transport:      trans,
+		endpoint:       defaultSpeechSynthesizePath,
+		streamEndpoint: defaultSpeechStreamPath,
 	}
 	client.File = &FileService{
 		transport:      trans,

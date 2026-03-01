@@ -12,13 +12,15 @@ import (
 
 const (
 	defaultSpeechSynthesizePath = "/v1/t2a_v2"
+	defaultSpeechStreamPath     = defaultSpeechSynthesizePath
 	defaultSpeechModel          = "speech-2.6-hd"
 	defaultSpeechOutputFormat   = "hex"
 )
 
 type SpeechService struct {
-	transport *transport.Client
-	endpoint  string
+	transport      *transport.Client
+	endpoint       string
+	streamEndpoint string
 }
 
 type SpeechRequest struct {
