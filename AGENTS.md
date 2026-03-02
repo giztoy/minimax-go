@@ -1,163 +1,153 @@
 # AGENTS.md
-Guide for coding agents operating in this repository.
-Scope: workflow, build/lint/test commands, and code style.
+Guide for coding agents in this repository.
+Scope: workflow, build/lint/test commands, style rules, and review checklist.
 
 ## 1) Repository model
-- Local development + direct merge.
-- No mandatory PR gate.
-- No mandatory CI gate.
-- Review basis: static code review + local test evidence.
+- Go module repo (`go.mod` at root).
+- Local development + direct merge to `main`.
+- No mandatory PR/CI gate.
+- Quality gate = local review + local command evidence.
 
 ## 2) Task source of truth
-Read in this order:
-1. `openteam/task.md` (goal + acceptance)
-2. `openteam/plan.md` (plan + required fixes)
+Read in this order before coding:
+1. `openteam/task.md`
+2. `openteam/plan.md`
 3. `openteam/test.md` (if present)
-4. Repository code/tests
-5. `openteam/worklog.md` (execution/test logs)
-If `design_proposal.md` / `test.md` is missing, treat as non-blocking unless task text says otherwise.
+4. `openteam/design_proposal/*`
+5. Existing code/tests/examples
+6. `openteam/worklog.md`
 
-## 3) Build / format / lint / test commands
-Repository type: Go module (`go.mod` in root).
+If a non-critical doc is missing, treat as non-blocking unless task text says it is required.
 
-### Format all code
+## 3) Build / lint / test commands
+
+### Baseline (always run before finishing)
 ```bash
 go fmt ./...
-```
-
-### Build all packages
-```bash
 go build ./...
-```
-
-### Lint baseline
-```bash
 go vet ./...
-```
-Optional if installed:
-```bash
-golangci-lint run
-```
-
-### Run all tests
-```bash
 go test ./...
 ```
 
-### Run tests in one package
+### Run tests by scope
+Run one package:
 ```bash
 go test ./internal/transport
+go test ./examples/speech
 ```
 
-### Run one test function
+Run a single test function (important):
 ```bash
-go test ./internal/transport -run '^TestOpenStream$'
+go test ./ -run '^TestSpeechAsync$'
+go test ./examples/speech -run '^TestWaitTask$'
 ```
 
-### Run one subtest
+Run one subtest:
 ```bash
-go test ./internal/transport -run 'TestOpenStream/http 200 with base_resp error should fail'
+go test ./ -run 'TestGetAsyncTask/succeeded with url and no audio bytes is valid'
 ```
 
-### Run tests by name pattern
+Run by regex pattern across packages:
 ```bash
-go test ./... -run 'TestSpeechSynthesize'
+go test ./... -run 'TestSpeechAsync|TestGetAsyncTask'
 ```
 
-### Run race detector
+Race / coverage / no-cache:
 ```bash
 go test -race ./...
-```
-
-### Coverage snapshot
-```bash
 go test ./... -cover
+go test ./... -count=1
 ```
 
-### Run speech example
+### Example command checks
 ```bash
 go run ./examples/speech -h
+go run ./examples/speech async -h
+go run ./examples/speech stream -h
+go run ./examples/speech http -h
+go run ./examples/voice/list -h
+go run ./examples/file -h
 ```
 
-## 4) Coding style guidelines
+## 4) Code style and design guidelines
 
-### Language and comments
-- Use English for code, comments, and CLI-facing text.
-- Write comments for intent/constraints, not obvious mechanics.
+### 4.1 Language and comments
+- Use English for identifiers, comments, and CLI/help text.
+- Comment intent/constraints; avoid narrating obvious mechanics.
 
-### Imports
-- Let `go fmt` manage import ordering.
-- Avoid unused imports and dot imports.
-- Alias imports only for collisions/clarity.
+### 4.2 Imports and formatting
+- Use `go fmt` to manage imports and formatting.
+- No unused imports, no dot imports.
+- Alias imports only for collision/clarity.
 
-### Formatting
-- Always run `go fmt ./...` before finishing.
-- Keep structure and naming consistent across packages.
-- Keep struct tags explicit and consistent.
+### 4.3 Layering
+- Public API at repo root.
+- Reusable internals in `internal/transport`, `internal/protocol`, `internal/stream`, `internal/codec`.
+- Do not bypass transport/protocol abstractions in new features.
 
-### Types and API design
-- Prefer concrete types over `any` when possible.
-- For optional numeric JSON fields, use pointers (`*float64`, `*int`) so explicit zero values are representable.
-- Keep exported API minimal and stable.
-- Separate internal wire structs from public API structs when helpful.
+### 4.4 Types and JSON modeling
+- Prefer explicit structs over `map[string]any` for stable fields.
+- Keep raw payload maps when forward-compatibility is needed.
+- Optional numeric JSON fields should use pointers (`*int`, `*float64`) so explicit zero remains representable.
+- Separate public structs from wire/raw structs when shapes differ.
+- Use typed enums for normalized states (e.g., async task state).
 
-### Naming
-- Exported identifiers: `PascalCase`.
-- Unexported identifiers: `camelCase`.
-- Use Go-style acronyms (`APIError`, `HTTPStatus`, `ID`).
-- Test functions: `TestXxx`; subtests should describe behavior.
+### 4.5 Naming
+- Exported: `PascalCase`; unexported: `camelCase`.
+- Acronyms in Go style: `APIError`, `HTTPStatus`, `TaskID`, `URL`.
+- Tests: `TestXxx`; subtests describe behavior.
 
-### Error handling
+### 4.6 Error handling
 - Never swallow errors.
-- Add context with `%w` wrapping (`fmt.Errorf("...: %w", err)`).
-- Use sentinel errors only when callers need `errors.Is`.
-- Preserve root cause detail for debugging.
+- Wrap with context via `%w`:
+```go
+return fmt.Errorf("query async task: %w", err)
+```
+- Use `errors.Is` / `errors.As` for classification.
+- Fail fast on local validation errors before network calls.
 
-### Context usage
-- Accept `context.Context` for network/IO boundaries.
-- Propagate context downward.
-- Do not create `context.Background()` in library flows.
-- Honor cancellation/timeouts in retry and sleep logic.
+### 4.7 Context handling
+- Accept `context.Context` at network/IO boundaries.
+- Propagate context downward unchanged.
+- No `context.Background()` inside library flows.
+- Respect cancellation/deadline in polling/retry loops.
 
-### HTTP/transport behavior
-- Normalize HTTP status errors and business errors (`base_resp`).
-- Validate stream content type and parse non-stream responses as potential structured errors.
-- Keep retry policy explicit (retryable kinds, max attempts, backoff).
-- Never retry `context.Canceled` or `context.DeadlineExceeded`.
+### 4.8 HTTP/protocol behavior
+- Normalize HTTP errors and `base_resp` business errors consistently.
+- For stream APIs, validate stream semantics and parse structured errors when possible.
+- Retry logic must not hide `context.Canceled` / `context.DeadlineExceeded`.
 
-### Testing expectations
-- Cover success and failure paths.
-- Include timeout/cancel/retry edge cases for transport code.
-- Assert meaningful outcomes (error type, status code, retry attempts, backoff calls).
-- Keep unit tests deterministic and offline unless task explicitly requests online integration.
+## 5) Testing policy
+- Cover success, failure, and boundary cases for each feature.
+- Mandatory for network flows: timeout, cancel, retry boundaries, protocol errors.
+- Assert meaningful outcomes (state mapping, error type, key fields), not only `err == nil`.
+- Unit tests should be offline via `httptest`; online tests must be opt-in by env switch.
 
-### Security and secrets
-- Never commit secrets/tokens/credentials.
-- Use environment variables for local secrets.
-- Treat `openteam/` as local collaboration artifacts (gitignored in this repository).
+## 6) Security and hygiene
+- Never commit real secrets/tokens/credentials.
+- Placeholder examples like `your_api_key` are acceptable.
+- No binaries/temp artifacts/log dumps in commits.
+- Treat `openteam/` as local collaboration assets in this repository context.
 
-## 5) Static review checklist
-Before marking done, verify:
-1. Functional correctness vs `openteam/task.md`
-2. Error handling quality and diagnosability
-3. Edge cases: empty/malformed input, timeout, cancel, retry limits
-4. Test coverage for critical paths
-5. Implementation completeness (no placeholder behavior)
-6. Repository hygiene (no binaries/temp files/sensitive data)
-Severity model:
-- P0: must fix (correctness/stability/security)
-- P1: should fix (maintainability/readability)
-- P2: optional improvement
+## 7) Review checklist before merge
+1. Meets `openteam/task.md` acceptance criteria.
+2. No placeholder logic (`TODO` stubs/fake returns) on required paths.
+3. Error handling is contextual and diagnosable.
+4. Edge cases covered (invalid input, timeout, cancel, protocol errors).
+5. Test evidence is reproducible via commands.
+6. No sensitive data or unrelated files; examples remain runnable.
 
-## 6) Required agent outputs
-When finishing work, update:
-1. `openteam/plan.md` (progress + fix checklist)
-2. `openteam/worklog.md` (commands + summarized results)
-3. `openteam/review.md` (when acting as reviewer)
+## 8) Required agent outputs
+When finishing work, update as applicable:
+1. `openteam/plan.md`
+2. `openteam/worklog.md`
+3. `openteam/review.md` (if acting as reviewer)
+4. design proposal status (`draft/wip/done/freeze`) when milestone changes
 
-## 7) Cursor / Copilot rule files
-Checked in this repository:
+## 9) Cursor / Copilot rule files
+Checked at update time:
 - `.cursor/rules/` — not found
 - `.cursorrules` — not found
 - `.github/copilot-instructions.md` — not found
-If these files are added later, update this AGENTS.md accordingly.
+
+If these files are added later, merge their instructions into this AGENTS.md and keep this section updated.
