@@ -1,5 +1,8 @@
 # minimax-go
 
+[![Go CI](https://github.com/giztoy/minimax-go/actions/workflows/go-ci.yml/badge.svg)](https://github.com/giztoy/minimax-go/actions/workflows/go-ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/giztoy/minimax-go)](https://goreportcard.com/report/github.com/giztoy/minimax-go)
+
 Go SDK and examples for MiniMax APIs.
 
 ## What is included
