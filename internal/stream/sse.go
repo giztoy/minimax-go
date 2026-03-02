@@ -34,59 +34,83 @@ func (r *Reader) Next() (Event, error) {
 	)
 
 	for {
-		line, err := r.reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
+		line, isEOF, err := r.readLine()
+		if err != nil {
 			return Event{}, err
 		}
 
-		if errors.Is(err, io.EOF) && line == "" {
-			if !hasField {
-				return Event{}, io.EOF
-			}
-			event.Data = strings.Join(dataLines, "\n")
-			return event, nil
+		if isEOF && line == "" {
+			return finalizeEvent(event, dataLines, hasField)
 		}
 
 		line = strings.TrimRight(line, "\r\n")
-
-		if line == "" {
-			if !hasField {
-				if errors.Is(err, io.EOF) {
+		if isEOF {
+			if line == "" {
+				return finalizeEvent(event, dataLines, hasField)
+			}
+			if strings.HasPrefix(line, ":") {
+				if !hasField {
 					return Event{}, io.EOF
 				}
-				continue
+				return finalizeEvent(event, dataLines, hasField)
 			}
+		}
 
-			event.Data = strings.Join(dataLines, "\n")
-			return event, nil
+		if line == "" {
+			if hasField {
+				return finalizeEvent(event, dataLines, hasField)
+			}
+			continue
 		}
 
 		if strings.HasPrefix(line, ":") {
-			if errors.Is(err, io.EOF) && !hasField {
-				return Event{}, io.EOF
-			}
 			continue
 		}
 
 		field, value := splitField(line)
 		hasField = true
+		applyEventField(&event, &dataLines, field, value)
 
-		switch field {
-		case "id":
-			event.ID = value
-		case "event":
-			event.Event = value
-		case "data":
-			dataLines = append(dataLines, value)
-		case "retry":
-			if retry, convErr := strconv.Atoi(value); convErr == nil && retry >= 0 {
-				event.Retry = retry
-			}
+		if isEOF {
+			return finalizeEvent(event, dataLines, hasField)
 		}
+	}
+}
 
-		if errors.Is(err, io.EOF) {
-			event.Data = strings.Join(dataLines, "\n")
-			return event, nil
+func (r *Reader) readLine() (string, bool, error) {
+	line, err := r.reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", false, err
+	}
+
+	return line, errors.Is(err, io.EOF), nil
+}
+
+func finalizeEvent(event Event, dataLines []string, hasField bool) (Event, error) {
+	if !hasField {
+		return Event{}, io.EOF
+	}
+
+	event.Data = strings.Join(dataLines, "\n")
+	return event, nil
+}
+
+func applyEventField(event *Event, dataLines *[]string, field, value string) {
+	if event == nil || dataLines == nil {
+		return
+	}
+
+	switch field {
+	case "id":
+		event.ID = value
+	case "event":
+		event.Event = value
+	case "data":
+		*dataLines = append(*dataLines, value)
+	case "retry":
+		retry, convErr := strconv.Atoi(value)
+		if convErr == nil && retry >= 0 {
+			event.Retry = retry
 		}
 	}
 }

@@ -121,20 +121,8 @@ func parseStreamOptions(args []string, out io.Writer) (streamOptions, error) {
 }
 
 func runStream(opts streamOptions, out io.Writer) (retErr error) {
-	if opts.apiKey == "" {
-		return errors.New("missing API key: use -api-key or set MINIMAX_API_KEY")
-	}
-
-	if opts.baseURL == "" {
-		return errors.New("base-url cannot be empty")
-	}
-
-	if opts.text == "" {
-		return errors.New("text cannot be empty")
-	}
-
-	if opts.output == "" {
-		return errors.New("output cannot be empty")
+	if err := validateStreamRuntimeOptions(opts); err != nil {
+		return err
 	}
 
 	client, err := minimax.NewClient(minimax.Config{
@@ -158,11 +146,7 @@ func runStream(opts streamOptions, out io.Writer) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("Speech.OpenStream failed: %w", err)
 	}
-	defer func() {
-		if closeErr := speechStream.Close(); closeErr != nil && retErr == nil {
-			retErr = fmt.Errorf("failed to close speech stream: %w", closeErr)
-		}
-	}()
+	defer closeWithRetError(speechStream, "speech stream", &retErr)
 
 	if err := ensureOutputDir(opts.output); err != nil {
 		return err
@@ -172,38 +156,11 @@ func runStream(opts streamOptions, out io.Writer) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("failed to open output file: %w", err)
 	}
-	defer func() {
-		if closeErr := outputFile.Close(); closeErr != nil && retErr == nil {
-			retErr = fmt.Errorf("failed to close output file: %w", closeErr)
-		}
-	}()
+	defer closeWithRetError(outputFile, "output file", &retErr)
 
-	totalBytes := 0
-	chunkCount := 0
-	for {
-		chunk, nextErr := speechStream.Next()
-		if nextErr != nil {
-			if errors.Is(nextErr, io.EOF) {
-				break
-			}
-			return fmt.Errorf("failed to read stream chunk: %w", nextErr)
-		}
-
-		if chunk == nil {
-			continue
-		}
-
-		if len(chunk.Audio) > 0 {
-			if _, writeErr := outputFile.Write(chunk.Audio); writeErr != nil {
-				return fmt.Errorf("failed to write audio chunk: %w", writeErr)
-			}
-			totalBytes += len(chunk.Audio)
-			chunkCount++
-		}
-
-		if chunk.Done {
-			break
-		}
+	totalBytes, chunkCount, err := writeSpeechStreamToFile(speechStream, outputFile)
+	if err != nil {
+		return err
 	}
 
 	if err := outputFile.Sync(); err != nil {
@@ -216,4 +173,57 @@ func runStream(opts streamOptions, out io.Writer) (retErr error) {
 
 	fmt.Fprintf(out, "stream synthesis succeeded, wrote %d bytes from %d chunks to %s\n", totalBytes, chunkCount, opts.output)
 	return nil
+}
+
+func validateStreamRuntimeOptions(opts streamOptions) error {
+	if opts.apiKey == "" {
+		return errors.New("missing API key: use -api-key or set MINIMAX_API_KEY")
+	}
+	if opts.baseURL == "" {
+		return errors.New("base-url cannot be empty")
+	}
+	if opts.text == "" {
+		return errors.New("text cannot be empty")
+	}
+	if opts.output == "" {
+		return errors.New("output cannot be empty")
+	}
+
+	return nil
+}
+
+func writeSpeechStreamToFile(speechStream *minimax.SpeechStream, outputFile *os.File) (totalBytes int, chunkCount int, err error) {
+	for {
+		chunk, nextErr := speechStream.Next()
+		if errors.Is(nextErr, io.EOF) {
+			return totalBytes, chunkCount, nil
+		}
+		if nextErr != nil {
+			return 0, 0, fmt.Errorf("failed to read stream chunk: %w", nextErr)
+		}
+		if chunk == nil {
+			continue
+		}
+
+		if len(chunk.Audio) > 0 {
+			if _, writeErr := outputFile.Write(chunk.Audio); writeErr != nil {
+				return 0, 0, fmt.Errorf("failed to write audio chunk: %w", writeErr)
+			}
+			totalBytes += len(chunk.Audio)
+			chunkCount++
+		}
+
+		if chunk.Done {
+			return totalBytes, chunkCount, nil
+		}
+	}
+}
+
+func closeWithRetError(closer io.Closer, name string, retErr *error) {
+	if closer == nil {
+		return
+	}
+	if err := closer.Close(); err != nil && retErr != nil && *retErr == nil {
+		*retErr = fmt.Errorf("failed to close %s: %w", name, err)
+	}
 }

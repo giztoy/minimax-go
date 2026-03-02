@@ -17,103 +17,107 @@ import (
 func TestWaitTask(t *testing.T) {
 	t.Parallel()
 
-	t.Run("polls until succeeded", func(t *testing.T) {
-		t.Parallel()
+	t.Run("polls until succeeded", testWaitTaskPollsUntilSucceeded)
+	t.Run("input validation", testWaitTaskInputValidation)
+	t.Run("context cancel is preserved", testWaitTaskContextCancel)
+}
 
-		var attempts int32
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/v1/query/t2a_async_query_v2" {
-				t.Fatalf("path = %s, want /v1/query/t2a_async_query_v2", r.URL.Path)
-			}
+func testWaitTaskPollsUntilSucceeded(t *testing.T) {
+	t.Parallel()
 
-			if got := r.URL.Query().Get("task_id"); got != "task_1" {
-				t.Fatalf("query.task_id = %q, want task_1", got)
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			if atomic.AddInt32(&attempts, 1) == 1 {
-				_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"task_id":"task_1","status":"processing"}`))
-				return
-			}
-
-			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"task_id":"task_1","status":"success","result":{"audio_url":"https://cdn.example.com/task_1.mp3"}}`))
-		}))
-		defer srv.Close()
-
-		client, err := minimax.NewClient(minimax.Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
-		if err != nil {
-			t.Fatalf("NewClient() error = %v, want nil", err)
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/query/t2a_async_query_v2" {
+			t.Fatalf("path = %s, want /v1/query/t2a_async_query_v2", r.URL.Path)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		var output bytes.Buffer
-		resp, err := waitTask(ctx, client, "task_1", time.Millisecond, &output)
-		if err != nil {
-			t.Fatalf("waitTask() error = %v, want nil", err)
+		if got := r.URL.Query().Get("task_id"); got != "task_1" {
+			t.Fatalf("query.task_id = %q, want task_1", got)
 		}
 
-		if resp.Status != minimax.SpeechTaskStateSucceeded {
-			t.Fatalf("resp.Status = %q, want succeeded", resp.Status)
-		}
-
-		if resp.Result.AudioURL != "https://cdn.example.com/task_1.mp3" {
-			t.Fatalf("resp.Result.AudioURL = %q, want https://cdn.example.com/task_1.mp3", resp.Result.AudioURL)
-		}
-
-		printed := output.String()
-		if !strings.Contains(printed, "poll #1") || !strings.Contains(printed, "poll #2") {
-			t.Fatalf("waitTask() output = %q, want poll #1 and poll #2 logs", printed)
-		}
-	})
-
-	t.Run("input validation", func(t *testing.T) {
-		t.Parallel()
-
-		_, err := waitTask(context.Background(), nil, "task_1", time.Second, &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "client is nil") {
-			t.Fatalf("waitTask(nil client) error = %v, want client is nil", err)
-		}
-
-		client, err := minimax.NewClient(minimax.Config{BaseURL: "https://api.minimax.io"})
-		if err != nil {
-			t.Fatalf("NewClient() error = %v, want nil", err)
-		}
-
-		_, err = waitTask(context.Background(), client, "", time.Second, &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "task_id") {
-			t.Fatalf("waitTask(empty task id) error = %v, want task_id validation", err)
-		}
-
-		_, err = waitTask(context.Background(), client, "task_1", 0, &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "poll interval") {
-			t.Fatalf("waitTask(zero interval) error = %v, want poll interval validation", err)
-		}
-	})
-
-	t.Run("context cancel is preserved", func(t *testing.T) {
-		t.Parallel()
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&attempts, 1) == 1 {
 			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"task_id":"task_1","status":"processing"}`))
-		}))
-		defer srv.Close()
-
-		client, err := minimax.NewClient(minimax.Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
-		if err != nil {
-			t.Fatalf("NewClient() error = %v, want nil", err)
+			return
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"task_id":"task_1","status":"success","result":{"audio_url":"https://cdn.example.com/task_1.mp3"}}`))
+	}))
+	defer srv.Close()
 
-		_, err = waitTask(ctx, client, "task_1", time.Millisecond, &bytes.Buffer{})
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("waitTask() error = %v, want context canceled", err)
-		}
-	})
+	client, err := minimax.NewClient(minimax.Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var output bytes.Buffer
+	resp, err := waitTask(ctx, client, "task_1", time.Millisecond, &output)
+	if err != nil {
+		t.Fatalf("waitTask() error = %v, want nil", err)
+	}
+
+	if resp.Status != minimax.SpeechTaskStateSucceeded {
+		t.Fatalf("resp.Status = %q, want succeeded", resp.Status)
+	}
+
+	if resp.Result.AudioURL != "https://cdn.example.com/task_1.mp3" {
+		t.Fatalf("resp.Result.AudioURL = %q, want https://cdn.example.com/task_1.mp3", resp.Result.AudioURL)
+	}
+
+	printed := output.String()
+	if !strings.Contains(printed, "poll #1") || !strings.Contains(printed, "poll #2") {
+		t.Fatalf("waitTask() output = %q, want poll #1 and poll #2 logs", printed)
+	}
+}
+
+func testWaitTaskInputValidation(t *testing.T) {
+	t.Parallel()
+
+	_, err := waitTask(context.Background(), nil, "task_1", time.Second, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "client is nil") {
+		t.Fatalf("waitTask(nil client) error = %v, want client is nil", err)
+	}
+
+	client, err := minimax.NewClient(minimax.Config{BaseURL: "https://api.minimax.io"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v, want nil", err)
+	}
+
+	_, err = waitTask(context.Background(), client, "", time.Second, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "task_id") {
+		t.Fatalf("waitTask(empty task id) error = %v, want task_id validation", err)
+	}
+
+	_, err = waitTask(context.Background(), client, "task_1", 0, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "poll interval") {
+		t.Fatalf("waitTask(zero interval) error = %v, want poll interval validation", err)
+	}
+}
+
+func testWaitTaskContextCancel(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"task_id":"task_1","status":"processing"}`))
+	}))
+	defer srv.Close()
+
+	client, err := minimax.NewClient(minimax.Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = waitTask(ctx, client, "task_1", time.Millisecond, &bytes.Buffer{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitTask() error = %v, want context canceled", err)
+	}
 }
 
 func TestOptionalEnvBool(t *testing.T) {

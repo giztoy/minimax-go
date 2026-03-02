@@ -465,76 +465,80 @@ func mapSpeechTaskStatusResponse(raw speechTaskRawResponse) (*SpeechTaskStatusRe
 }
 
 func mapSpeechTaskMeta(raw speechTaskRawResponse, payloads []*speechTaskRawPayload) SpeechTaskMeta {
-	meta := SpeechTaskMeta{}
-
-	meta.DurationSeconds = firstFloat64Pointer(raw.Duration, raw.AudioLength, raw.AudioDuration)
-	meta.SizeBytes = firstInt64Pointer(raw.Size, raw.Bytes, raw.FileSize, raw.AudioSize)
-	meta.Format = strings.TrimSpace(raw.Format)
-	meta.SampleRate = firstIntPointer(raw.SampleRate)
-	meta.Bitrate = firstIntPointer(raw.Bitrate)
-	meta.Channel = firstIntPointer(raw.Channel)
-
-	applyMeta := func(item *speechTaskMetaRaw) {
-		if item == nil {
-			return
-		}
-
-		if meta.DurationSeconds == nil {
-			meta.DurationSeconds = firstFloat64Pointer(item.Duration, item.AudioLength, item.AudioDuration)
-		}
-		if meta.SizeBytes == nil {
-			meta.SizeBytes = firstInt64Pointer(item.Size, item.Bytes, item.FileSize, item.AudioSize)
-		}
-		if meta.Format == "" {
-			meta.Format = strings.TrimSpace(item.Format)
-		}
-		if meta.SampleRate == nil {
-			meta.SampleRate = firstIntPointer(item.SampleRate)
-		}
-		if meta.Bitrate == nil {
-			meta.Bitrate = firstIntPointer(item.Bitrate)
-		}
-		if meta.Channel == nil {
-			meta.Channel = firstIntPointer(item.Channel)
-		}
+	meta := SpeechTaskMeta{
+		DurationSeconds: firstFloat64Pointer(raw.Duration, raw.AudioLength, raw.AudioDuration),
+		SizeBytes:       firstInt64Pointer(raw.Size, raw.Bytes, raw.FileSize, raw.AudioSize),
+		Format:          strings.TrimSpace(raw.Format),
+		SampleRate:      firstIntPointer(raw.SampleRate),
+		Bitrate:         firstIntPointer(raw.Bitrate),
+		Channel:         firstIntPointer(raw.Channel),
 	}
 
-	applyMeta(raw.Meta)
-	applyMeta(raw.ExtraInfo)
-	applyMeta(raw.AudioMeta)
-	applyMeta(raw.AudioInfo)
+	mergeSpeechTaskMeta(&meta, raw.Meta)
+	mergeSpeechTaskMeta(&meta, raw.ExtraInfo)
+	mergeSpeechTaskMeta(&meta, raw.AudioMeta)
+	mergeSpeechTaskMeta(&meta, raw.AudioInfo)
 
 	for _, payload := range payloads {
-		if payload == nil {
-			continue
-		}
-
-		if meta.DurationSeconds == nil {
-			meta.DurationSeconds = firstFloat64Pointer(payload.Duration, payload.AudioLength, payload.AudioDuration)
-		}
-		if meta.SizeBytes == nil {
-			meta.SizeBytes = firstInt64Pointer(payload.Size, payload.Bytes, payload.FileSize, payload.AudioSize)
-		}
-		if meta.Format == "" {
-			meta.Format = strings.TrimSpace(payload.Format)
-		}
-		if meta.SampleRate == nil {
-			meta.SampleRate = firstIntPointer(payload.SampleRate)
-		}
-		if meta.Bitrate == nil {
-			meta.Bitrate = firstIntPointer(payload.Bitrate)
-		}
-		if meta.Channel == nil {
-			meta.Channel = firstIntPointer(payload.Channel)
-		}
-
-		applyMeta(payload.Meta)
-		applyMeta(payload.ExtraInfo)
-		applyMeta(payload.AudioMeta)
-		applyMeta(payload.AudioInfo)
+		mergeSpeechTaskPayloadMeta(&meta, payload)
 	}
 
 	return meta
+}
+
+func mergeSpeechTaskPayloadMeta(meta *SpeechTaskMeta, payload *speechTaskRawPayload) {
+	if meta == nil || payload == nil {
+		return
+	}
+
+	if meta.DurationSeconds == nil {
+		meta.DurationSeconds = firstFloat64Pointer(payload.Duration, payload.AudioLength, payload.AudioDuration)
+	}
+	if meta.SizeBytes == nil {
+		meta.SizeBytes = firstInt64Pointer(payload.Size, payload.Bytes, payload.FileSize, payload.AudioSize)
+	}
+	if meta.Format == "" {
+		meta.Format = strings.TrimSpace(payload.Format)
+	}
+	if meta.SampleRate == nil {
+		meta.SampleRate = firstIntPointer(payload.SampleRate)
+	}
+	if meta.Bitrate == nil {
+		meta.Bitrate = firstIntPointer(payload.Bitrate)
+	}
+	if meta.Channel == nil {
+		meta.Channel = firstIntPointer(payload.Channel)
+	}
+
+	mergeSpeechTaskMeta(meta, payload.Meta)
+	mergeSpeechTaskMeta(meta, payload.ExtraInfo)
+	mergeSpeechTaskMeta(meta, payload.AudioMeta)
+	mergeSpeechTaskMeta(meta, payload.AudioInfo)
+}
+
+func mergeSpeechTaskMeta(meta *SpeechTaskMeta, rawMeta *speechTaskMetaRaw) {
+	if meta == nil || rawMeta == nil {
+		return
+	}
+
+	if meta.DurationSeconds == nil {
+		meta.DurationSeconds = firstFloat64Pointer(rawMeta.Duration, rawMeta.AudioLength, rawMeta.AudioDuration)
+	}
+	if meta.SizeBytes == nil {
+		meta.SizeBytes = firstInt64Pointer(rawMeta.Size, rawMeta.Bytes, rawMeta.FileSize, rawMeta.AudioSize)
+	}
+	if meta.Format == "" {
+		meta.Format = strings.TrimSpace(rawMeta.Format)
+	}
+	if meta.SampleRate == nil {
+		meta.SampleRate = firstIntPointer(rawMeta.SampleRate)
+	}
+	if meta.Bitrate == nil {
+		meta.Bitrate = firstIntPointer(rawMeta.Bitrate)
+	}
+	if meta.Channel == nil {
+		meta.Channel = firstIntPointer(rawMeta.Channel)
+	}
 }
 
 func collectSpeechTaskPayloads(initial ...*speechTaskRawPayload) []*speechTaskRawPayload {

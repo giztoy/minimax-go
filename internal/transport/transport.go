@@ -100,13 +100,9 @@ func (c *Client) DoJSON(ctx context.Context, request JSONRequest, out any) error
 		method = http.MethodPost
 	}
 
-	var payload []byte
-	var err error
-	if request.Body != nil {
-		payload, err = json.Marshal(request.Body)
-		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
-		}
+	payload, err := marshalRequestBody(request.Body, "marshal request body")
+	if err != nil {
+		return err
 	}
 
 	err = c.withRetry(ctx, func() error {
@@ -134,15 +130,7 @@ func (c *Client) DoJSON(ctx context.Context, request JSONRequest, out any) error
 			return checkErr
 		}
 
-		if out == nil || len(body) == 0 {
-			return nil
-		}
-
-		if unmarshalErr := json.Unmarshal(body, out); unmarshalErr != nil {
-			return fmt.Errorf("decode response body: %w", unmarshalErr)
-		}
-
-		return nil
+		return decodeResponseBody(body, out, "decode response body")
 	})
 	if err != nil {
 		return err
@@ -158,83 +146,26 @@ func (c *Client) OpenStream(ctx context.Context, request StreamRequest) (io.Read
 		method = http.MethodGet
 	}
 
-	var payload []byte
-	var err error
-	if request.Body != nil {
-		payload, err = json.Marshal(request.Body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal stream body: %w", err)
-		}
+	payload, err := marshalRequestBody(request.Body, "marshal stream body")
+	if err != nil {
+		return nil, err
 	}
 
 	var lastErr error
 	for attempt := 1; attempt <= c.retry.MaxAttempts; attempt++ {
-		req, reqErr := c.buildRequest(ctx, method, request.Path, request.Query, bytes.NewReader(payload))
-		if reqErr != nil {
-			return nil, reqErr
+		body, openErr := c.openStreamAttempt(ctx, method, payload, request)
+		if openErr == nil {
+			return body, nil
 		}
 
-		req.Header.Set("Accept", "text/event-stream")
-		if len(payload) > 0 {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		mergeHeaders(req.Header, request.Headers)
-
-		resp, doErr := c.httpClient.Do(req)
-		if doErr != nil {
-			lastErr = doErr
-			if !c.shouldRetry(doErr) || attempt == c.retry.MaxAttempts {
-				return nil, doErr
-			}
-
-			if sleepErr := c.retry.Sleep(ctx, c.retryDelay(attempt)); sleepErr != nil {
-				return nil, sleepErr
-			}
-			continue
+		lastErr = openErr
+		if !c.shouldRetry(openErr) || attempt == c.retry.MaxAttempts {
+			return nil, openErr
 		}
 
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			body, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if readErr != nil {
-				lastErr = fmt.Errorf("read stream error response: %w", readErr)
-			} else {
-				lastErr = protocol.CheckResponse(resp.StatusCode, body)
-			}
-
-			if !c.shouldRetry(lastErr) || attempt == c.retry.MaxAttempts {
-				return nil, lastErr
-			}
-
-			if sleepErr := c.retry.Sleep(ctx, c.retryDelay(attempt)); sleepErr != nil {
-				return nil, sleepErr
-			}
-			continue
+		if sleepErr := c.retry.Sleep(ctx, c.retryDelay(attempt)); sleepErr != nil {
+			return nil, sleepErr
 		}
-
-		contentType := resp.Header.Get("Content-Type")
-		if !isEventStreamContentType(contentType) {
-			body, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if readErr != nil {
-				lastErr = fmt.Errorf("read non-stream response body: %w", readErr)
-			} else if checkErr := protocol.CheckResponse(resp.StatusCode, body); checkErr != nil {
-				lastErr = checkErr
-			} else {
-				lastErr = fmt.Errorf("unexpected stream content type: %q", contentType)
-			}
-
-			if !c.shouldRetry(lastErr) || attempt == c.retry.MaxAttempts {
-				return nil, lastErr
-			}
-
-			if sleepErr := c.retry.Sleep(ctx, c.retryDelay(attempt)); sleepErr != nil {
-				return nil, sleepErr
-			}
-			continue
-		}
-
-		return resp.Body, nil
 	}
 
 	if lastErr == nil {
@@ -260,43 +191,19 @@ func (c *Client) Upload(ctx context.Context, request UploadRequest, out any) err
 	}
 
 	return c.withRetry(ctx, func() error {
-		var payload bytes.Buffer
-		writer := multipart.NewWriter(&payload)
-
-		for key, value := range request.Fields {
-			if err := writer.WriteField(key, value); err != nil {
-				return fmt.Errorf("write field %s: %w", key, err)
-			}
-		}
-
-		header := textproto.MIMEHeader{}
-		contentDisposition := fmt.Sprintf(`form-data; name=%q; filename=%q`, request.FileField, request.FileName)
-		header.Set("Content-Disposition", contentDisposition)
-		if request.FileContentType != "" {
-			header.Set("Content-Type", request.FileContentType)
-		}
-
-		part, err := writer.CreatePart(header)
+		payload, contentType, err := buildUploadPayload(request)
 		if err != nil {
-			return fmt.Errorf("create file part: %w", err)
+			return err
 		}
 
-		if _, err := part.Write(request.FileData); err != nil {
-			return fmt.Errorf("write file data: %w", err)
-		}
-
-		if err := writer.Close(); err != nil {
-			return fmt.Errorf("close multipart writer: %w", err)
-		}
-
-		req, reqErr := c.buildRequest(ctx, method, request.Path, request.Query, bytes.NewReader(payload.Bytes()))
+		req, reqErr := c.buildRequest(ctx, method, request.Path, request.Query, bytes.NewReader(payload))
 		if reqErr != nil {
 			return reqErr
 		}
 
 		req.Header.Set("Accept", "application/json")
 		mergeHeaders(req.Header, request.Headers)
-		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("Content-Type", contentType)
 
 		resp, doErr := c.httpClient.Do(req)
 		if doErr != nil {
@@ -313,16 +220,113 @@ func (c *Client) Upload(ctx context.Context, request UploadRequest, out any) err
 			return checkErr
 		}
 
-		if out == nil || len(body) == 0 {
-			return nil
-		}
-
-		if unmarshalErr := json.Unmarshal(body, out); unmarshalErr != nil {
-			return fmt.Errorf("decode upload response: %w", unmarshalErr)
-		}
-
-		return nil
+		return decodeResponseBody(body, out, "decode upload response")
 	})
+}
+
+func (c *Client) openStreamAttempt(ctx context.Context, method string, payload []byte, request StreamRequest) (io.ReadCloser, error) {
+	req, reqErr := c.buildRequest(ctx, method, request.Path, request.Query, bytes.NewReader(payload))
+	if reqErr != nil {
+		return nil, reqErr
+	}
+
+	req.Header.Set("Accept", "text/event-stream")
+	if len(payload) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	mergeHeaders(req.Header, request.Headers)
+
+	resp, doErr := c.httpClient.Do(req)
+	if doErr != nil {
+		return nil, doErr
+	}
+
+	return c.validateStreamResponse(resp)
+}
+
+func (c *Client) validateStreamResponse(resp *http.Response) (io.ReadCloser, error) {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, readResponseError(resp, "read stream error response")
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if isEventStreamContentType(contentType) {
+		return resp.Body, nil
+	}
+
+	if err := readResponseError(resp, "read non-stream response body"); err != nil {
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("unexpected stream content type: %q", contentType)
+}
+
+func readResponseError(resp *http.Response, readErrPrefix string) error {
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("%s: %w", readErrPrefix, err)
+	}
+
+	return protocol.CheckResponse(resp.StatusCode, body)
+}
+
+func marshalRequestBody(body any, errorPrefix string) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", errorPrefix, err)
+	}
+
+	return payload, nil
+}
+
+func decodeResponseBody(body []byte, out any, errorPrefix string) error {
+	if out == nil || len(body) == 0 {
+		return nil
+	}
+
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("%s: %w", errorPrefix, err)
+	}
+
+	return nil
+}
+
+func buildUploadPayload(request UploadRequest) ([]byte, string, error) {
+	var payload bytes.Buffer
+	writer := multipart.NewWriter(&payload)
+
+	for key, value := range request.Fields {
+		if err := writer.WriteField(key, value); err != nil {
+			return nil, "", fmt.Errorf("write field %s: %w", key, err)
+		}
+	}
+
+	header := textproto.MIMEHeader{}
+	contentDisposition := fmt.Sprintf(`form-data; name=%q; filename=%q`, request.FileField, request.FileName)
+	header.Set("Content-Disposition", contentDisposition)
+	if request.FileContentType != "" {
+		header.Set("Content-Type", request.FileContentType)
+	}
+
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return nil, "", fmt.Errorf("create file part: %w", err)
+	}
+
+	if _, err := part.Write(request.FileData); err != nil {
+		return nil, "", fmt.Errorf("write file data: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, "", fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	return payload.Bytes(), writer.FormDataContentType(), nil
 }
 
 func (c *Client) withRetry(ctx context.Context, op func() error) error {

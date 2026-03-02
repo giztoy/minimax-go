@@ -19,247 +19,251 @@ import (
 func TestDoJSON(t *testing.T) {
 	t.Parallel()
 
-	t.Run("success", func(t *testing.T) {
-		t.Parallel()
+	t.Run("success", testDoJSONSuccess)
+	t.Run("base_resp error", testDoJSONBaseRespError)
+	t.Run("retry eventually success", testDoJSONRetryEventuallySuccess)
+	t.Run("retry exhausted returns last retryable error", testDoJSONRetryExhausted)
+	t.Run("request headers override default headers", testDoJSONHeaderOverride)
+	t.Run("timeout canceled by context", testDoJSONContextTimeout)
+}
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				t.Fatalf("method = %s, want POST", r.Method)
-			}
+func testDoJSONSuccess(t *testing.T) {
+	t.Parallel()
 
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"value":"done"}`))
-		}))
-		defer srv.Close()
-
-		client, err := New(Config{
-			BaseURL:    srv.URL,
-			HTTPClient: srv.Client(),
-		})
-		if err != nil {
-			t.Fatalf("New() error = %v, want nil", err)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
 		}
 
-		var out struct {
-			Value string `json:"value"`
-		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"value":"done"}`))
+	}))
+	defer srv.Close()
 
-		err = client.DoJSON(context.Background(), JSONRequest{
-			Method: http.MethodPost,
-			Path:   "/json",
-			Body:   map[string]string{"text": "hello"},
-		}, &out)
-		if err != nil {
-			t.Fatalf("DoJSON() error = %v, want nil", err)
-		}
+	client, err := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v, want nil", err)
+	}
 
-		if out.Value != "done" {
-			t.Fatalf("out.Value = %q, want done", out.Value)
-		}
-	})
+	var out struct {
+		Value string `json:"value"`
+	}
 
-	t.Run("base_resp error", func(t *testing.T) {
-		t.Parallel()
+	err = client.DoJSON(context.Background(), JSONRequest{
+		Method: http.MethodPost,
+		Path:   "/json",
+		Body:   map[string]string{"text": "hello"},
+	}, &out)
+	if err != nil {
+		t.Fatalf("DoJSON() error = %v, want nil", err)
+	}
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"base_resp":{"status_code":2301,"status_msg":"invalid model"}}`))
-		}))
-		defer srv.Close()
+	if out.Value != "done" {
+		t.Fatalf("out.Value = %q, want done", out.Value)
+	}
+}
 
-		client, err := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
-		if err != nil {
-			t.Fatalf("New() error = %v, want nil", err)
-		}
+func testDoJSONBaseRespError(t *testing.T) {
+	t.Parallel()
 
-		err = client.DoJSON(context.Background(), JSONRequest{Path: "/json"}, nil)
-		if err == nil {
-			t.Fatal("DoJSON() error = nil, want non-nil")
-		}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":2301,"status_msg":"invalid model"}}`))
+	}))
+	defer srv.Close()
 
-		var apiErr *protocol.APIError
-		if !errors.As(err, &apiErr) {
-			t.Fatalf("DoJSON() error type = %T, want *protocol.APIError", err)
-		}
+	client, err := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v, want nil", err)
+	}
 
-		if apiErr.StatusCode != 2301 {
-			t.Fatalf("apiErr.StatusCode = %d, want 2301", apiErr.StatusCode)
-		}
-	})
+	err = client.DoJSON(context.Background(), JSONRequest{Path: "/json"}, nil)
+	if err == nil {
+		t.Fatal("DoJSON() error = nil, want non-nil")
+	}
 
-	t.Run("retry eventually success", func(t *testing.T) {
-		t.Parallel()
+	var apiErr *protocol.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("DoJSON() error type = %T, want *protocol.APIError", err)
+	}
 
-		var attempts int32
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			current := atomic.AddInt32(&attempts, 1)
-			if current < 3 {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte(`{"error":"temporary"}`))
-				return
-			}
+	if apiErr.StatusCode != 2301 {
+		t.Fatalf("apiErr.StatusCode = %d, want 2301", apiErr.StatusCode)
+	}
+}
 
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"value":"ok"}`))
-		}))
-		defer srv.Close()
+func testDoJSONRetryEventuallySuccess(t *testing.T) {
+	t.Parallel()
 
-		client, err := New(Config{
-			BaseURL:    srv.URL,
-			HTTPClient: srv.Client(),
-			Retry: RetryConfig{
-				MaxAttempts: 3,
-				BaseDelay:   time.Millisecond,
-				MaxDelay:    time.Millisecond,
-				Sleep: func(context.Context, time.Duration) error {
-					return nil
-				},
-			},
-		})
-		if err != nil {
-			t.Fatalf("New() error = %v, want nil", err)
-		}
-
-		err = client.DoJSON(context.Background(), JSONRequest{Path: "/json"}, nil)
-		if err != nil {
-			t.Fatalf("DoJSON() error = %v, want nil", err)
-		}
-
-		if got := atomic.LoadInt32(&attempts); got != 3 {
-			t.Fatalf("attempts = %d, want 3", got)
-		}
-	})
-
-	t.Run("retry exhausted returns last retryable error", func(t *testing.T) {
-		t.Parallel()
-
-		var attempts int32
-		var sleepCalls int32
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			atomic.AddInt32(&attempts, 1)
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := atomic.AddInt32(&attempts, 1)
+		if current < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"still unavailable"}`))
-		}))
-		defer srv.Close()
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
 
-		client, err := New(Config{
-			BaseURL:    srv.URL,
-			HTTPClient: srv.Client(),
-			Retry: RetryConfig{
-				MaxAttempts: 3,
-				BaseDelay:   time.Millisecond,
-				MaxDelay:    time.Millisecond,
-				Sleep: func(context.Context, time.Duration) error {
-					atomic.AddInt32(&sleepCalls, 1)
-					return nil
-				},
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"value":"ok"}`))
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+		Retry: RetryConfig{
+			MaxAttempts: 3,
+			BaseDelay:   time.Millisecond,
+			MaxDelay:    time.Millisecond,
+			Sleep: func(context.Context, time.Duration) error {
+				return nil
 			},
-		})
-		if err != nil {
-			t.Fatalf("New() error = %v, want nil", err)
-		}
-
-		err = client.DoJSON(context.Background(), JSONRequest{Path: "/json"}, nil)
-		if err == nil {
-			t.Fatal("DoJSON() error = nil, want non-nil")
-		}
-
-		var apiErr *protocol.APIError
-		if !errors.As(err, &apiErr) {
-			t.Fatalf("DoJSON() error type = %T, want *protocol.APIError", err)
-		}
-
-		if apiErr.HTTPStatus != http.StatusServiceUnavailable {
-			t.Fatalf("apiErr.HTTPStatus = %d, want %d", apiErr.HTTPStatus, http.StatusServiceUnavailable)
-		}
-
-		if got := atomic.LoadInt32(&attempts); got != 3 {
-			t.Fatalf("attempts = %d, want 3", got)
-		}
-
-		if got := atomic.LoadInt32(&sleepCalls); got != 2 {
-			t.Fatalf("sleepCalls = %d, want 2", got)
-		}
+		},
 	})
+	if err != nil {
+		t.Fatalf("New() error = %v, want nil", err)
+	}
 
-	t.Run("request headers override default headers", func(t *testing.T) {
-		t.Parallel()
+	err = client.DoJSON(context.Background(), JSONRequest{Path: "/json"}, nil)
+	if err != nil {
+		t.Fatalf("DoJSON() error = %v, want nil", err)
+	}
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authorizationValues := r.Header.Values("Authorization")
-			if len(authorizationValues) != 1 {
-				t.Fatalf("Authorization values = %v, want single value", authorizationValues)
-			}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+}
 
-			if authorizationValues[0] != "Bearer request-token" {
-				t.Fatalf("Authorization = %q, want %q", authorizationValues[0], "Bearer request-token")
-			}
+func testDoJSONRetryExhausted(t *testing.T) {
+	t.Parallel()
 
-			contentTypeValues := r.Header.Values("Content-Type")
-			if len(contentTypeValues) != 1 {
-				t.Fatalf("Content-Type values = %v, want single value", contentTypeValues)
-			}
+	var attempts int32
+	var sleepCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"still unavailable"}`))
+	}))
+	defer srv.Close()
 
-			if contentTypeValues[0] != "application/custom+json" {
-				t.Fatalf("Content-Type = %q, want %q", contentTypeValues[0], "application/custom+json")
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"}}`))
-		}))
-		defer srv.Close()
-
-		client, err := New(Config{
-			BaseURL:    srv.URL,
-			HTTPClient: srv.Client(),
-			DefaultHeaders: http.Header{
-				"Authorization": []string{"Bearer default-token"},
+	client, err := New(Config{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+		Retry: RetryConfig{
+			MaxAttempts: 3,
+			BaseDelay:   time.Millisecond,
+			MaxDelay:    time.Millisecond,
+			Sleep: func(context.Context, time.Duration) error {
+				atomic.AddInt32(&sleepCalls, 1)
+				return nil
 			},
-		})
-		if err != nil {
-			t.Fatalf("New() error = %v, want nil", err)
-		}
-
-		err = client.DoJSON(context.Background(), JSONRequest{
-			Path: "/json",
-			Headers: http.Header{
-				"Authorization": []string{"Bearer request-token"},
-				"Content-Type":  []string{"application/custom+json"},
-			},
-		}, nil)
-		if err != nil {
-			t.Fatalf("DoJSON() error = %v, want nil", err)
-		}
+		},
 	})
+	if err != nil {
+		t.Fatalf("New() error = %v, want nil", err)
+	}
 
-	t.Run("timeout canceled by context", func(t *testing.T) {
-		t.Parallel()
+	err = client.DoJSON(context.Background(), JSONRequest{Path: "/json"}, nil)
+	if err == nil {
+		t.Fatal("DoJSON() error = nil, want non-nil")
+	}
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(150 * time.Millisecond)
-			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"}}`))
-		}))
-		defer srv.Close()
+	var apiErr *protocol.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("DoJSON() error type = %T, want *protocol.APIError", err)
+	}
 
-		client, err := New(Config{
-			BaseURL:    srv.URL,
-			HTTPClient: srv.Client(),
-			Retry: RetryConfig{
-				MaxAttempts: 1,
-			},
-		})
-		if err != nil {
-			t.Fatalf("New() error = %v, want nil", err)
+	if apiErr.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("apiErr.HTTPStatus = %d, want %d", apiErr.HTTPStatus, http.StatusServiceUnavailable)
+	}
+
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+
+	if got := atomic.LoadInt32(&sleepCalls); got != 2 {
+		t.Fatalf("sleepCalls = %d, want 2", got)
+	}
+}
+
+func testDoJSONHeaderOverride(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizationValues := r.Header.Values("Authorization")
+		if len(authorizationValues) != 1 {
+			t.Fatalf("Authorization values = %v, want single value", authorizationValues)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		defer cancel()
-
-		err = client.DoJSON(ctx, JSONRequest{Path: "/json"}, nil)
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("DoJSON() error = %v, want context deadline exceeded", err)
+		if authorizationValues[0] != "Bearer request-token" {
+			t.Fatalf("Authorization = %q, want %q", authorizationValues[0], "Bearer request-token")
 		}
+
+		contentTypeValues := r.Header.Values("Content-Type")
+		if len(contentTypeValues) != 1 {
+			t.Fatalf("Content-Type values = %v, want single value", contentTypeValues)
+		}
+
+		if contentTypeValues[0] != "application/custom+json" {
+			t.Fatalf("Content-Type = %q, want %q", contentTypeValues[0], "application/custom+json")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"}}`))
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+		DefaultHeaders: http.Header{
+			"Authorization": []string{"Bearer default-token"},
+		},
 	})
+	if err != nil {
+		t.Fatalf("New() error = %v, want nil", err)
+	}
+
+	err = client.DoJSON(context.Background(), JSONRequest{
+		Path: "/json",
+		Headers: http.Header{
+			"Authorization": []string{"Bearer request-token"},
+			"Content-Type":  []string{"application/custom+json"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("DoJSON() error = %v, want nil", err)
+	}
+}
+
+func testDoJSONContextTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"}}`))
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+		Retry: RetryConfig{
+			MaxAttempts: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err = client.DoJSON(ctx, JSONRequest{Path: "/json"}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DoJSON() error = %v, want context deadline exceeded", err)
+	}
 }
 
 func TestOpenStream(t *testing.T) {

@@ -36,6 +36,24 @@ type asyncOptions struct {
 	noWait       bool
 }
 
+type asyncDefaults struct {
+	apiKey            string
+	baseURL           string
+	taskID            string
+	text              string
+	textFileID        string
+	model             string
+	voiceID           string
+	speed             float64
+	volume            float64
+	speedSetByEnv     bool
+	volumeSetByEnv    bool
+	timeout           time.Duration
+	pollInterval      time.Duration
+	wait              bool
+	noWaitFlagDefault bool
+}
+
 func runAsyncCommand(args []string, stdout, stderr io.Writer) error {
 	opts, err := parseAsyncOptions(args, stderr)
 	if err != nil {
@@ -74,17 +92,9 @@ func parseTaskAliasOptions(args []string, out io.Writer) (asyncOptions, error) {
 		asyncDefaultPollInterval,
 	)
 
-	waitDefault := true
-	if waitFromEnv, waitSetByEnv, waitErr := optionalEnvBool("MINIMAX_SPEECH_ASYNC_WAIT"); waitErr != nil {
-		return asyncOptions{}, fmt.Errorf("invalid MINIMAX_SPEECH_ASYNC_WAIT: %w", waitErr)
-	} else if waitSetByEnv {
-		waitDefault = waitFromEnv
-	}
-
-	if noWaitFromEnv, noWaitSetByEnv, noWaitErr := optionalEnvBool("MINIMAX_SPEECH_ASYNC_NO_WAIT"); noWaitErr != nil {
-		return asyncOptions{}, fmt.Errorf("invalid MINIMAX_SPEECH_ASYNC_NO_WAIT: %w", noWaitErr)
-	} else if noWaitSetByEnv {
-		waitDefault = !noWaitFromEnv
+	waitDefault, err := resolveAsyncWaitDefault()
+	if err != nil {
+		return asyncOptions{}, err
 	}
 
 	fs := flag.NewFlagSet("task", flag.ContinueOnError)
@@ -109,16 +119,11 @@ func parseTaskAliasOptions(args []string, out io.Writer) (asyncOptions, error) {
 		return asyncOptions{}, err
 	}
 
-	if flagWasSet(fs, "wait") && flagWasSet(fs, "no-wait") {
-		return asyncOptions{}, errors.New("wait and no-wait cannot be set together")
-	}
-	if flagWasSet(fs, "no-wait") {
-		opts.wait = !opts.noWait
+	if err := applyAsyncWaitFlags(fs, &opts); err != nil {
+		return asyncOptions{}, err
 	}
 
-	opts.apiKey = strings.TrimSpace(opts.apiKey)
-	opts.baseURL = strings.TrimSpace(opts.baseURL)
-	opts.taskID = strings.TrimSpace(opts.taskID)
+	trimAsyncOptions(&opts)
 
 	if opts.timeout <= 0 {
 		return asyncOptions{}, errors.New("timeout must be greater than 0")
@@ -142,66 +147,30 @@ func parseTaskAliasOptions(args []string, out io.Writer) (asyncOptions, error) {
 
 func parseAsyncOptions(args []string, out io.Writer) (asyncOptions, error) {
 	var opts asyncOptions
-
-	apiKeyDefault := os.Getenv("MINIMAX_API_KEY")
-	baseURLDefault := envOrDefault("MINIMAX_BASE_URL", exampleDefaultBaseURL)
-	taskIDDefault := strings.TrimSpace(envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_TASK_ID", "MINIMAX_SPEECH_ASYNC_TASK_ID"}, ""))
-	textDefault := envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_TEXT", "MINIMAX_SPEECH_TEXT"}, asyncDefaultText)
-	textFileIDDefault := os.Getenv("MINIMAX_SPEECH_ASYNC_TEXT_FILE_ID")
-	modelDefault := envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_MODEL", "MINIMAX_SPEECH_MODEL"}, asyncDefaultModel)
-	voiceDefault := envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_VOICE_ID", "MINIMAX_SPEECH_VOICE_ID"}, "")
-
-	speedDefault, speedSetByEnv, err := optionalEnvFloat64FromKeys("MINIMAX_SPEECH_ASYNC_SPEED", "MINIMAX_SPEECH_SPEED")
+	defaults, err := loadAsyncDefaults()
 	if err != nil {
-		return asyncOptions{}, fmt.Errorf("invalid speech speed env: %w", err)
-	}
-	if !speedSetByEnv {
-		speedDefault = 1
-	}
-
-	volumeDefault, volumeSetByEnv, err := optionalEnvFloat64FromKeys("MINIMAX_SPEECH_ASYNC_VOLUME", "MINIMAX_SPEECH_VOLUME")
-	if err != nil {
-		return asyncOptions{}, fmt.Errorf("invalid speech volume env: %w", err)
-	}
-	if !volumeSetByEnv {
-		volumeDefault = 1
-	}
-
-	timeoutDefault := envDurationOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_TIMEOUT", "MINIMAX_SPEECH_TIMEOUT"}, asyncDefaultTimeout)
-	pollIntervalDefault := envDurationOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_POLL_INTERVAL", "MINIMAX_SPEECH_TASK_POLL_INTERVAL"}, asyncDefaultPollInterval)
-
-	waitDefault := true
-	if waitFromEnv, waitSetByEnv, waitErr := optionalEnvBool("MINIMAX_SPEECH_ASYNC_WAIT"); waitErr != nil {
-		return asyncOptions{}, fmt.Errorf("invalid MINIMAX_SPEECH_ASYNC_WAIT: %w", waitErr)
-	} else if waitSetByEnv {
-		waitDefault = waitFromEnv
-	}
-
-	if noWaitFromEnv, noWaitSetByEnv, noWaitErr := optionalEnvBool("MINIMAX_SPEECH_ASYNC_NO_WAIT"); noWaitErr != nil {
-		return asyncOptions{}, fmt.Errorf("invalid MINIMAX_SPEECH_ASYNC_NO_WAIT: %w", noWaitErr)
-	} else if noWaitSetByEnv {
-		waitDefault = !noWaitFromEnv
+		return asyncOptions{}, err
 	}
 
 	fs := flag.NewFlagSet("async", flag.ContinueOnError)
 	fs.SetOutput(out)
 
-	speedValue := speedDefault
-	volumeValue := volumeDefault
+	speedValue := defaults.speed
+	volumeValue := defaults.volume
 
-	fs.StringVar(&opts.apiKey, "api-key", apiKeyDefault, "Minimax API key (or env MINIMAX_API_KEY)")
-	fs.StringVar(&opts.baseURL, "base-url", baseURLDefault, "Minimax API base URL (env: MINIMAX_BASE_URL)")
-	fs.StringVar(&opts.taskID, "task-id", taskIDDefault, "Query existing task_id instead of submitting new text")
-	fs.StringVar(&opts.text, "text", textDefault, "Input text for submit mode (env: MINIMAX_SPEECH_ASYNC_TEXT)")
-	fs.StringVar(&opts.textFileID, "text-file-id", textFileIDDefault, "Uploaded text file_id for submit mode (optional)")
-	fs.StringVar(&opts.model, "model", modelDefault, "Model name for submit mode (optional)")
-	fs.StringVar(&opts.voiceID, "voice-id", voiceDefault, "Voice ID for submit mode (optional; some regions require this)")
-	fs.Float64Var(&speedValue, "speed", speedDefault, "Speech speed for submit mode (optional)")
-	fs.Float64Var(&volumeValue, "volume", volumeDefault, "Speech volume for submit mode (optional)")
-	fs.DurationVar(&opts.timeout, "timeout", timeoutDefault, "Total timeout for submit/query workflow")
-	fs.DurationVar(&opts.pollInterval, "poll-interval", pollIntervalDefault, "Polling interval when wait=true")
-	fs.BoolVar(&opts.wait, "wait", waitDefault, "Wait/poll until terminal status")
-	fs.BoolVar(&opts.noWait, "no-wait", !waitDefault, "Alias of -wait=false")
+	fs.StringVar(&opts.apiKey, "api-key", defaults.apiKey, "Minimax API key (or env MINIMAX_API_KEY)")
+	fs.StringVar(&opts.baseURL, "base-url", defaults.baseURL, "Minimax API base URL (env: MINIMAX_BASE_URL)")
+	fs.StringVar(&opts.taskID, "task-id", defaults.taskID, "Query existing task_id instead of submitting new text")
+	fs.StringVar(&opts.text, "text", defaults.text, "Input text for submit mode (env: MINIMAX_SPEECH_ASYNC_TEXT)")
+	fs.StringVar(&opts.textFileID, "text-file-id", defaults.textFileID, "Uploaded text file_id for submit mode (optional)")
+	fs.StringVar(&opts.model, "model", defaults.model, "Model name for submit mode (optional)")
+	fs.StringVar(&opts.voiceID, "voice-id", defaults.voiceID, "Voice ID for submit mode (optional; some regions require this)")
+	fs.Float64Var(&speedValue, "speed", defaults.speed, "Speech speed for submit mode (optional)")
+	fs.Float64Var(&volumeValue, "volume", defaults.volume, "Speech volume for submit mode (optional)")
+	fs.DurationVar(&opts.timeout, "timeout", defaults.timeout, "Total timeout for submit/query workflow")
+	fs.DurationVar(&opts.pollInterval, "poll-interval", defaults.pollInterval, "Polling interval when wait=true")
+	fs.BoolVar(&opts.wait, "wait", defaults.wait, "Wait/poll until terminal status")
+	fs.BoolVar(&opts.noWait, "no-wait", defaults.noWaitFlagDefault, "Alias of -wait=false")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: go run ./examples/speech async [flags]\n\n")
@@ -215,20 +184,11 @@ func parseAsyncOptions(args []string, out io.Writer) (asyncOptions, error) {
 		return asyncOptions{}, err
 	}
 
-	if flagWasSet(fs, "wait") && flagWasSet(fs, "no-wait") {
-		return asyncOptions{}, errors.New("wait and no-wait cannot be set together")
-	}
-	if flagWasSet(fs, "no-wait") {
-		opts.wait = !opts.noWait
+	if err := applyAsyncWaitFlags(fs, &opts); err != nil {
+		return asyncOptions{}, err
 	}
 
-	opts.apiKey = strings.TrimSpace(opts.apiKey)
-	opts.baseURL = strings.TrimSpace(opts.baseURL)
-	opts.taskID = strings.TrimSpace(opts.taskID)
-	opts.text = strings.TrimSpace(opts.text)
-	opts.textFileID = strings.TrimSpace(opts.textFileID)
-	opts.model = strings.TrimSpace(opts.model)
-	opts.voiceID = strings.TrimSpace(opts.voiceID)
+	trimAsyncOptions(&opts)
 
 	if opts.timeout <= 0 {
 		return asyncOptions{}, errors.New("timeout must be greater than 0")
@@ -242,17 +202,98 @@ func parseAsyncOptions(args []string, out io.Writer) (asyncOptions, error) {
 		return asyncOptions{}, errors.New("submit mode requires text or text-file-id")
 	}
 
-	if speedSetByEnv || flagWasSet(fs, "speed") {
+	if defaults.speedSetByEnv || flagWasSet(fs, "speed") {
 		speed := speedValue
 		opts.speed = &speed
 	}
 
-	if volumeSetByEnv || flagWasSet(fs, "volume") {
+	if defaults.volumeSetByEnv || flagWasSet(fs, "volume") {
 		volume := volumeValue
 		opts.volume = &volume
 	}
 
 	return opts, nil
+}
+
+func loadAsyncDefaults() (asyncDefaults, error) {
+	defaults := asyncDefaults{
+		apiKey:       os.Getenv("MINIMAX_API_KEY"),
+		baseURL:      envOrDefault("MINIMAX_BASE_URL", exampleDefaultBaseURL),
+		taskID:       strings.TrimSpace(envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_TASK_ID", "MINIMAX_SPEECH_ASYNC_TASK_ID"}, "")),
+		text:         envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_TEXT", "MINIMAX_SPEECH_TEXT"}, asyncDefaultText),
+		textFileID:   os.Getenv("MINIMAX_SPEECH_ASYNC_TEXT_FILE_ID"),
+		model:        envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_MODEL", "MINIMAX_SPEECH_MODEL"}, asyncDefaultModel),
+		voiceID:      envOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_VOICE_ID", "MINIMAX_SPEECH_VOICE_ID"}, ""),
+		timeout:      envDurationOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_TIMEOUT", "MINIMAX_SPEECH_TIMEOUT"}, asyncDefaultTimeout),
+		pollInterval: envDurationOrDefaultFromKeys([]string{"MINIMAX_SPEECH_ASYNC_POLL_INTERVAL", "MINIMAX_SPEECH_TASK_POLL_INTERVAL"}, asyncDefaultPollInterval),
+	}
+
+	speed, speedSetByEnv, err := optionalEnvFloat64FromKeys("MINIMAX_SPEECH_ASYNC_SPEED", "MINIMAX_SPEECH_SPEED")
+	if err != nil {
+		return asyncDefaults{}, fmt.Errorf("invalid speech speed env: %w", err)
+	}
+	if !speedSetByEnv {
+		speed = 1
+	}
+	defaults.speed = speed
+	defaults.speedSetByEnv = speedSetByEnv
+
+	volume, volumeSetByEnv, err := optionalEnvFloat64FromKeys("MINIMAX_SPEECH_ASYNC_VOLUME", "MINIMAX_SPEECH_VOLUME")
+	if err != nil {
+		return asyncDefaults{}, fmt.Errorf("invalid speech volume env: %w", err)
+	}
+	if !volumeSetByEnv {
+		volume = 1
+	}
+	defaults.volume = volume
+	defaults.volumeSetByEnv = volumeSetByEnv
+
+	waitDefault, err := resolveAsyncWaitDefault()
+	if err != nil {
+		return asyncDefaults{}, err
+	}
+	defaults.wait = waitDefault
+	defaults.noWaitFlagDefault = !waitDefault
+
+	return defaults, nil
+}
+
+func resolveAsyncWaitDefault() (bool, error) {
+	waitDefault := true
+	if waitFromEnv, waitSetByEnv, waitErr := optionalEnvBool("MINIMAX_SPEECH_ASYNC_WAIT"); waitErr != nil {
+		return false, fmt.Errorf("invalid MINIMAX_SPEECH_ASYNC_WAIT: %w", waitErr)
+	} else if waitSetByEnv {
+		waitDefault = waitFromEnv
+	}
+
+	if noWaitFromEnv, noWaitSetByEnv, noWaitErr := optionalEnvBool("MINIMAX_SPEECH_ASYNC_NO_WAIT"); noWaitErr != nil {
+		return false, fmt.Errorf("invalid MINIMAX_SPEECH_ASYNC_NO_WAIT: %w", noWaitErr)
+	} else if noWaitSetByEnv {
+		waitDefault = !noWaitFromEnv
+	}
+
+	return waitDefault, nil
+}
+
+func applyAsyncWaitFlags(fs *flag.FlagSet, opts *asyncOptions) error {
+	if flagWasSet(fs, "wait") && flagWasSet(fs, "no-wait") {
+		return errors.New("wait and no-wait cannot be set together")
+	}
+	if flagWasSet(fs, "no-wait") {
+		opts.wait = !opts.noWait
+	}
+
+	return nil
+}
+
+func trimAsyncOptions(opts *asyncOptions) {
+	opts.apiKey = strings.TrimSpace(opts.apiKey)
+	opts.baseURL = strings.TrimSpace(opts.baseURL)
+	opts.taskID = strings.TrimSpace(opts.taskID)
+	opts.text = strings.TrimSpace(opts.text)
+	opts.textFileID = strings.TrimSpace(opts.textFileID)
+	opts.model = strings.TrimSpace(opts.model)
+	opts.voiceID = strings.TrimSpace(opts.voiceID)
 }
 
 func runAsync(opts asyncOptions, out io.Writer) error {
