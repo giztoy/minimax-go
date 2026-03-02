@@ -45,8 +45,10 @@ func NewClient(config Config) (*Client, error) {
 		maxUploadBytes: defaultFileMaxUploadBytes,
 	}
 	client.Voice = &VoiceService{
-		transport: trans,
-		endpoint:  defaultVoiceListPath,
+		transport:      trans,
+		endpoint:       defaultVoiceListPath,
+		designEndpoint: defaultVoiceDesignPath,
+		cloneEndpoint:  defaultVoiceClonePath,
 	}
 
 	return client, nil

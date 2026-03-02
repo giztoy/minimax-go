@@ -1,7 +1,9 @@
 package minimax
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -46,10 +48,12 @@ type FileUploadResponse struct {
 	Meta     FileMeta `json:"meta,omitempty"`
 }
 
+type flexibleString string
+
 type fileUploadRawResponse struct {
 	Uploaded    bool                  `json:"uploaded,omitempty"`
-	FileID      string                `json:"file_id,omitempty"`
-	ID          string                `json:"id,omitempty"`
+	FileID      flexibleString        `json:"file_id,omitempty"`
+	ID          flexibleString        `json:"id,omitempty"`
 	FileURL     string                `json:"file_url,omitempty"`
 	URL         string                `json:"url,omitempty"`
 	FileName    string                `json:"file_name,omitempty"`
@@ -64,17 +68,17 @@ type fileUploadRawResponse struct {
 }
 
 type fileUploadRawPayload struct {
-	Uploaded    *bool  `json:"uploaded,omitempty"`
-	FileID      string `json:"file_id,omitempty"`
-	ID          string `json:"id,omitempty"`
-	FileURL     string `json:"file_url,omitempty"`
-	URL         string `json:"url,omitempty"`
-	FileName    string `json:"file_name,omitempty"`
-	Name        string `json:"name,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	MIMEType    string `json:"mime_type,omitempty"`
-	Size        *int64 `json:"size,omitempty"`
-	Bytes       *int64 `json:"bytes,omitempty"`
+	Uploaded    *bool          `json:"uploaded,omitempty"`
+	FileID      flexibleString `json:"file_id,omitempty"`
+	ID          flexibleString `json:"id,omitempty"`
+	FileURL     string         `json:"file_url,omitempty"`
+	URL         string         `json:"url,omitempty"`
+	FileName    string         `json:"file_name,omitempty"`
+	Name        string         `json:"name,omitempty"`
+	ContentType string         `json:"content_type,omitempty"`
+	MIMEType    string         `json:"mime_type,omitempty"`
+	Size        *int64         `json:"size,omitempty"`
+	Bytes       *int64         `json:"bytes,omitempty"`
 }
 
 // Upload uploads file bytes through multipart/form-data and returns normalized metadata.
@@ -179,7 +183,7 @@ func mapFileUploadResponse(raw fileUploadRawResponse, request FileUploadRequest,
 	payload := firstNonNilUploadPayload(raw.Data, raw.File, raw.Result)
 
 	response := &FileUploadResponse{
-		FileID:   firstNonEmptyValue(raw.FileID, raw.ID),
+		FileID:   firstNonEmptyValue(raw.FileID.String(), raw.ID.String()),
 		FileURL:  firstNonEmptyValue(raw.FileURL, raw.URL),
 		Uploaded: raw.Uploaded,
 		Meta: FileMeta{
@@ -196,7 +200,7 @@ func mapFileUploadResponse(raw fileUploadRawResponse, request FileUploadRequest,
 	}
 
 	if payload != nil {
-		response.FileID = firstNonEmptyValue(response.FileID, payload.FileID, payload.ID)
+		response.FileID = firstNonEmptyValue(response.FileID, payload.FileID.String(), payload.ID.String())
 		response.FileURL = firstNonEmptyValue(response.FileURL, payload.FileURL, payload.URL)
 		response.Meta.FileName = firstNonEmptyValue(payload.FileName, payload.Name, response.Meta.FileName)
 		response.Meta.ContentType = firstNonEmptyValue(payload.ContentType, payload.MIMEType, response.Meta.ContentType)
@@ -223,6 +227,35 @@ func firstNonNilUploadPayload(payloads ...*fileUploadRawPayload) *fileUploadRawP
 	}
 
 	return nil
+}
+
+func (s flexibleString) String() string {
+	return string(s)
+}
+
+func (s *flexibleString) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*s = ""
+		return nil
+	}
+
+	var str string
+	if err := json.Unmarshal(trimmed, &str); err == nil {
+		*s = flexibleString(strings.TrimSpace(str))
+		return nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
+
+	var number json.Number
+	if err := decoder.Decode(&number); err == nil {
+		*s = flexibleString(number.String())
+		return nil
+	}
+
+	return errors.New("invalid string-like field value")
 }
 
 func firstNonEmptyValue(values ...string) string {

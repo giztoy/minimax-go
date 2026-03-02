@@ -1,46 +1,18 @@
-# Voice Example
+# Voice Examples
 
-`examples/voice` demonstrates voice list queries via `Voice.ListVoices`, including voice type filter and pagination parameters.
+Voice-related examples are organized under `examples/voice/` with three subdirectories:
 
-## Quick start
+1. `list/` — list available voices (`Voice.ListVoices`)
+2. `design/` — design a custom voice from prompt text (`Voice.DesignVoice`)
+3. `clone/` — clone a voice from `audio_url` / `file_id` / local upload (`Voice.CloneVoice`)
 
-```bash
-export MINIMAX_API_KEY="your_api_key"
+## Quick links
 
-go run ./examples/voice \
-  -voice-type all \
-  -page-size 20
-```
+- List: `examples/voice/list/README.md`
+- Design: `examples/voice/design/README.md`
+- Clone: `examples/voice/clone/README.md`
 
-Use `-json` to print the formatted typed response as JSON (`Raw` unknown fields are not included):
+## Notes
 
-```bash
-go run ./examples/voice \
-  -voice-type system \
-  -json
-```
-
-## Show all CLI options
-
-```bash
-go run ./examples/voice -h
-```
-
-## Common flags
-
-- `-api-key`: Minimax API key (takes precedence over `MINIMAX_API_KEY`)
-- `-base-url`: API endpoint (default: `https://api.minimax.io`)
-- `-voice-type`: voice type filter (`system`, `voice_cloning`, `voice_generation`, `all`)
-- `-page-size`: optional page size
-- `-page-token`: optional next-page token
-- `-timeout`: request timeout (default: `30s`)
-- `-json`: print response as formatted JSON
-
-## Environment variables
-
-- `MINIMAX_API_KEY`
-- `MINIMAX_BASE_URL`
-- `MINIMAX_VOICE_TYPE`
-- `MINIMAX_VOICE_PAGE_SIZE`
-- `MINIMAX_VOICE_PAGE_TOKEN`
-- `MINIMAX_VOICE_TIMEOUT`
+- The full snapshot of **official non-cloning voices** is maintained in `examples/voice/list/README.md`.
+- In China region (`https://api.minimax.chat`), `audio_url` clone may be unsupported; use `file_id` or local upload flow instead.

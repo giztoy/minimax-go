@@ -115,6 +115,41 @@ func TestFileUpload(t *testing.T) {
 		}
 	})
 
+	t.Run("numeric file_id in response is normalized to string", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"base_resp":{"status_code":0,"status_msg":"ok"},"data":{"file_id":123456789,"file_url":"https://cdn.example.com/file_123456789","file_name":"demo.wav","content_type":"audio/wav","size":10}}`))
+		}))
+		defer srv.Close()
+
+		client, err := NewClient(Config{
+			BaseURL:    srv.URL,
+			HTTPClient: srv.Client(),
+			Retry: transport.RetryConfig{
+				MaxAttempts: 1,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewClient() error = %v, want nil", err)
+		}
+
+		response, err := client.File.Upload(context.Background(), FileUploadRequest{
+			Purpose:     "voice_clone",
+			FileName:    "demo.wav",
+			ContentType: "audio/wav",
+			Data:        []byte("hello file"),
+		})
+		if err != nil {
+			t.Fatalf("Upload() error = %v, want nil", err)
+		}
+
+		if response.FileID != "123456789" {
+			t.Fatalf("response.FileID = %q, want 123456789", response.FileID)
+		}
+	})
+
 	t.Run("empty file name fails fast", func(t *testing.T) {
 		t.Parallel()
 

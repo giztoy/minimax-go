@@ -45,7 +45,7 @@ func main() {
 	}
 
 	if err := run(opts); err != nil {
-		fmt.Fprintf(os.Stderr, "voice example failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "voice list example failed: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -81,7 +81,7 @@ func parseOptions() (options, error) {
 	flag.BoolVar(&opts.asJSON, "json", false, "Print response as formatted JSON")
 
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: go run ./examples/voice [flags]\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: go run ./examples/voice/list [flags]\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(flag.CommandLine.Output(), "\nNotes:\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  - API key precedence: -api-key > MINIMAX_API_KEY\n")
