@@ -1,53 +1,87 @@
-# Speech Example
+# Speech Example (Unified)
 
-`examples/speech` demonstrates synchronous text-to-speech synthesis via `Speech.Synthesize`, then writes the returned audio bytes to a local file.
+`examples/speech` is the unified speech CLI entry with subcommands:
 
-## Prerequisites
+- `async`: submit async TTS **or** query existing `task_id` (with `-wait` / `-no-wait`)
+- `stream`: stream TTS chunks and merge to a local file
+- `http`: synchronous HTTP TTS and write local file
 
-- Go 1.26+
-- A valid Minimax API key
+`task` is kept as a backward-compatible alias of `async` task query mode.
+It is **query-only** and requires explicit `-task-id`.
 
 ## Quick start
 
 ```bash
 export MINIMAX_API_KEY="your_api_key"
+```
 
-go run ./examples/speech \
-  -text "hello from minimax-go" \
+### 1) Async
+
+```bash
+go run ./examples/speech async \
+  -text "hello async" \
+  -voice-id "male-qn-qingse"
+```
+
+### 2) Stream
+
+```bash
+go run ./examples/speech stream \
+  -text "hello stream" \
+  -voice-id "male-qn-qingse" \
+  -output /tmp/speech_stream_output.audio
+```
+
+### 3) Task Query (inside `async`)
+
+```bash
+go run ./examples/speech async \
+  -task-id 123456789 \
+  -wait
+```
+
+### 4) HTTP (sync)
+
+```bash
+go run ./examples/speech http \
+  -text "hello http" \
   -voice-id "male-qn-qingse" \
   -output /tmp/speech_output.audio
 ```
 
-If successful, the command prints the output file path and byte size.
-
-## Show all CLI options
+## Show CLI help
 
 ```bash
 go run ./examples/speech -h
+go run ./examples/speech async -h
+go run ./examples/speech stream -h
+go run ./examples/speech http -h
 ```
 
-## Common flags
+Alias help (deprecated but supported):
 
-- `-api-key`: Minimax API key (takes precedence over `MINIMAX_API_KEY`)
-- `-base-url`: API endpoint (default: `https://api.minimax.io`)
-- `-text`: text to synthesize
-- `-model`: model name (default: `speech-2.6-hd`)
-- `-voice-id`: optional voice ID
-- `-speed`: optional speech speed
-- `-volume`: optional speech volume
-- `-timeout`: request timeout (default: `30s`)
-- `-output`: output file path (default: `speech_output.audio`)
+```bash
+go run ./examples/speech task -h
+```
 
-## Environment variables
+Query-only behavior:
 
-You can configure the same options via environment variables:
+```bash
+go run ./examples/speech task -task-id 123456789 -wait
+```
 
-- `MINIMAX_API_KEY`
-- `MINIMAX_BASE_URL`
-- `MINIMAX_SPEECH_TEXT`
-- `MINIMAX_SPEECH_MODEL`
-- `MINIMAX_SPEECH_VOICE_ID`
-- `MINIMAX_SPEECH_SPEED`
-- `MINIMAX_SPEECH_VOLUME`
-- `MINIMAX_SPEECH_TIMEOUT`
-- `MINIMAX_SPEECH_OUTPUT`
+If `-task-id` is missing, the command fails fast and will not trigger submit.
+
+## Migration from old example paths
+
+- `go run ./examples/speech_async ...` -> `go run ./examples/speech async ...`
+- `go run ./examples/speech_stream ...` -> `go run ./examples/speech stream ...`
+- `go run ./examples/speech ...` (old sync mode) -> `go run ./examples/speech http ...`
+
+Backward compatibility is kept for old sync flag style:
+
+```bash
+go run ./examples/speech -text "hello" -voice-id "male-qn-qingse"
+```
+
+This is treated as the `http` command.
